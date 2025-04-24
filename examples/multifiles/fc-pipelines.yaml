@@ -1,0 +1,19 @@
+apiVersion: "1.21.0"
+createNamespace: true
+namespace: &namespace ai-bumblebee-proxy
+customLabels:
+  - smc.slack-tektonbot-token=true
+  - smc.jarvis-github-token=true
+  - role.deploy-k8s/fc-idi-pro-rev1=true
+
+!include .pipelines/configuration.yaml
+
+!include .pipelines/aliases.yaml
+
+pipelines:
+
+  branches:
+    !include .pipelines/push.yaml
+
+  pull_requests:
+    !include .pipelines/pr.yaml

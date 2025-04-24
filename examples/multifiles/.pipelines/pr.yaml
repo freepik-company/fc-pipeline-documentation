@@ -1,0 +1,106 @@
+# TODO: Send messages to github PR comments
+
+- name: pr
+  regex: ".+"
+  serviceAccount: *namespace
+  nextPipeline: {}
+  steps:
+    - name: status-pr-initial
+      <<: *githubStatus
+      <<: *githubStatusPending
+
+    - name: git-clone
+      description: Clone the repository
+      <<: *gitClone
+
+    - name: run-integration-tests
+      description: Run integration tests
+      <<: *builderImage
+      runAfter:
+        - git-clone
+      serviceAccount: *namespace
+      env:
+        - name: MOCKSERVER_HOST
+          value: "127.0.0.1"
+        - name: MOCKSERVER_PORT
+          value: "1080"
+      script: |
+        #!/usr/bin/env sh
+        set -ex
+
+        scripts/check_integration_tests.sh
+
+        # Wait for mockserver and bumblebee to be ready
+        sleep 10
+
+        # Run integration tests
+        for file in test/integration/*.http; do
+          ./scripts/run_http_test_file.sh $file
+        done
+      sidecars:
+        # MockServer
+        - name: mockserver
+          <<: *mockserverImage
+          env:
+            - name: MOCKSERVER_INITIALIZATION_JSON_PATH
+              value: /fc/workspace-data/test/mockserver/*.json
+        # Bumblebee Nginx server
+        - name: bumblebee
+          <<: *bumblebeeBaseImage
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Copy config files
+              mkdir -p /etc/nginx/templates/endpoints
+              cp -r /fc/workspace-data/src/conf/*.conf.template /etc/nginx/templates/endpoints
+              mkdir -p /etc/nginx/lua
+              cp -r /fc/workspace-data/src/lua/*.lua /etc/nginx/lua
+              mkdir -p /etc/nginx/libs
+              cp -r /fc/workspace-data/src/libs/*.lua /etc/nginx/libs
+              # Add mockserver to /etc/hosts
+              export $(cat /fc/workspace-data/.env.dist | grep -v '^#' | grep -v '^$' | xargs)
+              # Run nginx
+              /docker-entrypoint.sh openresty -g "daemon off;"
+
+    - name: helmfile-diff
+      description: Show helmfile diff for PR changes (send to github comment)
+      runAfter:
+        - git-clone
+      serviceAccount: *namespace
+      <<: *helmfileImage
+      burndownEnabled: "false"
+      params:
+        - name: project
+          value: "fc-idi-pro-rev1"
+        - name: region
+          value: "europe-west4"
+        - name: cluster
+          value: "fc-idi-europe"
+      script: |
+        #!/usr/bin/env sh
+        set -ex
+
+        # Set up gke credentials
+        gcloud container clusters get-credentials \
+          $(params.cluster) \
+          --region $(params.region) \
+          --project $(params.project)
+
+        gcloud auth application-default print-access-token | helm registry \
+              login -u oauth2accesstoken --password-stdin https://europe-docker.pkg.dev
+
+        /usr/local/bin/helmfile diff -f deploy/env/test/helmfile.yaml
+
+  finishSteps:
+    - name: status-pr-failed
+      condition: "failed"
+      <<: *githubStatus
+      <<: *githubStatusFailure
+
+    - name: status-pr-successful
+      condition: "success"
+      <<: *githubStatus
+      <<: *githubStatusSuccess
+
+# TODO: test helm charts

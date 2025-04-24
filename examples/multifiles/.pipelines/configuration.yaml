@@ -1,0 +1,26 @@
+#
+# Configurations for the pipeline
+#
+configuration:
+  gitCredentialsSecret: github-credentials
+  tektonDashboardURL: https://pipelines.fpkmon.com/
+  sendmailSender: jarvis@freepik.com
+  nodeSelector:
+    machine_type: n2d-standard-16
+  tolerations:
+    - key: "type"
+      operator: "Equal"
+      value: "pipelines"
+      effect: "NoSchedule"
+  enableAutocloneRepo: false
+  burnupAndBurndownEnabled: false
+  burnupEnabled: false
+  burndownEnabled: false
+  sharedDataWorkspace:
+    volumeClaimTemplate:
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi

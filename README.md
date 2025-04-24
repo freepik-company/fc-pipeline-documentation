@@ -1,32 +1,29 @@
 # pipeline-generator
 
-Create Tekton pipelines from a simple yalm file
-
-![Version: 1.15.0](https://img.shields.io/badge/Version-1.15.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square)
+Create Tekton pipelines from a simple YAML file
 
 ## Examples
 
-Next an example of pipeline:
+Below are examples of pipeline configurations:
 
-A simple pipeline configuration with a selection of nodes of kubernetes using `nodeSelector` and `tolerations`.
-Also create automatically the namespace and service account where to run the steps of this pipeline if it doesn't exist.
-Set custom labels in the namespace resource to allow tools like `kyverno` deploying custom resources for our new namespace:
+### Single File Pipeline
+
+A simple pipeline configuration in a single file:
+
 ```yaml
-apiVersion: "1.1.0"
+apiVersion: "1.21.0"
 namespace: my-namespace
 createNamespace: true # 'false' by default
-customLabels: "custom.label=true another.customLabel='customValue'"
+customLabels:
+  - custom.label=true
+  - another.customLabel=customValue
 
 configuration:
-  gitCredentialsSecret: bitbucket-credentials # The secret name with the credentials to allow
-                                              # access to private repositories. Call it github-credentials,
-                                              # for example, to authenticate with github repositories.
-  tektonDashboardURL: https://tekton.cdnpk.net
+  gitCredentialsSecret: bitbucket-credentials 
+  tektonDashboardURL: https://pipelines.fpkmon.com/
   sendmailSender: jarvis@freepik.com
-  defaultImagePullPolicy: IfNotPresent # Since 1.1.0 you can choose a policy to download images
-  cloneDepth: 20 # since 1.0.4 yu can  choose a depth to clone repository
-  # Example configuration to set the nodepool where to run the pipelines.
-  # This is optional.
+  defaultImagePullPolicy: IfNotPresent
+  cloneDepth: 20
   nodeSelector:
     type: pipelines
   tolerations:
@@ -36,94 +33,154 @@ configuration:
     effect: "NoSchedule"
 
 pipelines:
-  ...
+  branches:
+  - name: example-pipeline
+    regex: ^main$
+    serviceAccount: my-namespace
+    nextPipeline: {}
+
+    steps:
+    - name: sample
+      description: Just a sample step
+      image: alpine:latest
+      script: |
+        #!/usr/bin/env sh
+        set -ex
+        echo "This is a sample step"
+
+    - name: sample-no-burn
+      burnupEnabled: "false"
+      burndownEnabled: "false"
+      description: Sample step without burnup/burndown
+      image: alpine:latest
+      script: |
+        #!/usr/bin/env sh
+        set -ex
+        echo "This is a sample step with burns disabled"
 ```
 
-A simple pipeline configuration with a shared data workspace:
-```yaml
-apiVersion: "1.1.0"
-namespace: my-namespace
+### Multi-file Pipeline
 
+You can split your pipeline configuration into multiple files for better organization:
+
+**Main configuration file (fc-pipelines.yaml):**
+```yaml
+apiVersion: "1.21.0"
+createNamespace: true
+namespace: &namespace my-service
+customLabels:
+  - smc.slack-tektonbot-token=true
+  - smc.jarvis-github-token=true
+  - role.deploy-k8s/my-project=true
+
+!include .pipelines/configuration.yaml
+
+!include .pipelines/aliases.yaml
+
+pipelines:
+  branches:
+    !include .pipelines/push.yaml
+
+  pull_requests:
+    !include .pipelines/pr.yaml
+```
+
+**Configuration file (.pipelines/configuration.yaml):**
+```yaml
 configuration:
-  gitCredentialsSecret: bitbucket-credentials
-  tektonDashboardURL: https://tekton.cdnpk.net
+  gitCredentialsSecret: github-credentials
+  tektonDashboardURL: https://pipelines.fpkmon.com/
   sendmailSender: jarvis@freepik.com
-  # This is an example of a workspace configuration where to save the code,
-  # dependencies and builds between steps. This is optional and you need to use it
-  # carefully due to use this configuration does not allow you to run steps in
-  # more than one kubernetes node because a Workspace is a Volume Disk linked an
-  # only one machine. It's recommended to use artifacts and cache instead.
+  nodeSelector:
+    machine_type: n2d-standard-16
+  tolerations:
+    - key: "type"
+      operator: "Equal"
+      value: "pipelines"
+      effect: "NoSchedule"
+  enableAutocloneRepo: false
+  burnupAndBurndownEnabled: false
   sharedDataWorkspace:
     volumeClaimTemplate:
       spec:
         accessModes:
-        - ReadWriteOnce
+          - ReadWriteOnce
         resources:
           requests:
             storage: 1Gi
-
-pipelines:
-  ...
 ```
 
-A configuration of pipeline for a `master` branch. It's composed of two steps:
+**Branch pipeline file (.pipelines/push.yaml):**
 ```yaml
-...
+- name: main
+  regex: "^main$"
+  serviceAccount: *namespace
+  nextPipeline: {}
+  steps:
+    - name: git-clone
+      description: Clone the repository
+      <<: *gitClone  # Uses an alias defined in aliases.yaml
 
-pipelines:
-  # A pipeline of type 'branch'. It will run with a push to the branch master.
-  branches:
-  - name: example-pipeline
-    regex: ^master$
-    # Service account with permission to launch new pipelines.
-    serviceAccount: my-sa
-    # This pipeline won't launch a new pipeline
-    nextPipeline: {}
-
-    steps:
-    # Sample step
-    - name: sample
-      description: Just a sample step
+    - name: build
+      description: Build the application
+      runAfter:
+        - git-clone
       image: alpine:latest
       script: |
         #!/usr/bin/env sh
         set -ex
-        echo "This is a sample step"
-
-    steps:
-    # Sample step with burns disables
-    - name: sample
-      burnupEnabled: "false"
-      burndownEnabled: "false"
-      description: Just a sample step
-      image: alpine:latest
-      script: |
-        #!/usr/bin/env sh
-        set -ex
-        echo "This is a sample step"
+        echo "Building the application"
 ```
 
-Another sample step that shows us a 'tag' type of pipeline running a new pipeline when the first one finishes successfully:
+**Aliases file (.pipelines/aliases.yaml):**
+```yaml
+# Aliases for reusable configurations
+
+# Repository name reference
+repositoryName: &repositoryName my-organization/my-service
+
+# Custom images
+builderImage: &builderImage
+  image: my-registry/common/builder:1.0.0
+
+# Git clone alias
+gitClone: &gitClone
+  <<: *builderImage
+  burnupEnabled: "false"
+  burndownEnabled: "false"
+  script: |
+    #!/bin/sh
+    set -e
+    git clone -b $(params.branch) $(params.repository) /workspace
+    git reset --hard $(params.commit)
+    git checkout $(params.branch)
+```
+
+### Tag Pipeline Example
+
+A tag-based pipeline that triggers on semantic versioning tags:
 
 ```yaml
-...
+apiVersion: "1.21.0"
+namespace: my-namespace
+
+configuration:
+  gitCredentialsSecret: github-credentials
+  tektonDashboardURL: https://pipelines.fpkmon.com/
+  sendmailSender: jarvis@freepik.com
 
 pipelines:
   tags:
   - name: integration
-    # A clumsy regex to allow pushed tags in a simple SemVer way
     regex: ^([0-9]+)\.([0-9]+)\.([0-9]+)$
-    serviceAccount: my-sa
+    serviceAccount: my-namespace
     nextPipeline:
-      # If the integration pipeline finishes successfully, it will run a custom pipeline whose regular expression match 'deploy'.
       success: deploy
 
     steps:
-    # Download dependencies
     - name: deps
-      description: download dependencies
+      description: Download dependencies
       image: composer:latest
-      # Example of usage of custom environment variables
       env:
       - name: CUSTOM_VARIABLE_TOKEN
         valueFrom:
@@ -138,23 +195,19 @@ pipelines:
         #!/usr/bin/env sh
         set -ex
         echo "Run compose with custom authentication using the token. ${CUSTOM_VARIABLE_TOKEN}"
-      # Example of artifacts and cache usage
       artifacts:
       - ./code/vendor
       cache:
       - ./code/vendor
 
-    # tests
     - name: tests
-      image: docker pull phpunit/phpunit:7.4.0
-      # Run after example usage
+      image: phpunit/phpunit:7.4.0
       runAfter:
       - deps
       script: |
         #!/usr/bin/env sh
         set -ex
-        echo "This step runs the tests
-      # Usage example of sidecars needed by the tests
+        echo "This step runs the tests"
       sidecars:
       - name: redis
         image: 'bitnami/redis:latest'
@@ -164,20 +217,17 @@ pipelines:
       - name: memcached
         image: 'bitnami/memcached:latest'
 
-    # build image
     - name: build
-      description: build and push docker image
+      description: Build and push docker image
       image: gcr.io/kaniko-project/executor:latest
       runAfter:
-      - test
-      # In this step we show how to use args to the command instead using a script
-      args: ["-f", "Dockerfile", "--target", "app", "--skip-unused-stages",  "-d", "europe-west1-docker.pkg.dev/fc-shared/mentor/test-pipeline:$(params.shortCommit)", "--context", "."]
+      - tests
+      args: ["-f", "Dockerfile", "--target", "app", "--skip-unused-stages",  "-d", "my-registry/my-repo/my-image:$(params.shortCommit)", "--context", "."]
 
-  # Custom pipelines for deploy with burns disabled on nextPipeline
   custom:
   - name: deployment
     regex: ^deploy$
-    serviceAccount: my-sa
+    serviceAccount: my-namespace
     nextPipeline:
       success: deploy
       burnupEnabled: "false"
@@ -186,7 +236,7 @@ pipelines:
 
     steps:
     - name: deploy
-      description: deploy application
+      description: Deploy application
       image: alpine:latest
       burnupEnabled: "false"
       burndownEnabled: "false"
@@ -195,35 +245,46 @@ pipelines:
         echo "Deployment step"
 ```
 
-Next we show how to run a pull request pipeline:
+### Pull Request Pipeline Example
 
 ```yaml
-...
+apiVersion: "1.21.0"
+namespace: my-namespace
+
+configuration:
+  gitCredentialsSecret: github-credentials
+  tektonDashboardURL: https://pipelines.fpkmon.com/
 
 pipelines:
-
-  # Pull requests
   pull_requests:
   - name: pr-example
-    # Run with whatever the name of the pull request branch
     regex: ".+"
-    serviceAccount: my-sa
+    serviceAccount: my-namespace
     nextPipeline: {}
 
     steps:
     - name: tests
-      description: test in a pull request
+      description: Test in a pull request
       image: alpine:latest
       script: |
         #!/usr/bin/env sh
         echo "This runs the test in a pull request pipeline"
+        
+    finishSteps:
+    - name: notification
+      condition: "always"
+      description: Send notification about PR status
+      image: curl:latest
+      script: |
+        #!/usr/bin/env sh
+        echo "Sending notification about PR status"
 ```
 
 ## Values
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| apiVersion | string | `"1.15.0"` | API Version to use to build the pipeline |
+| apiVersion | string | `"1.21.0"` | API Version to use to build the pipeline |
 | charts.OCIRegistry | string | `"europe-west1-docker.pkg.dev"` | OCI image registry where the charts will be saved |
 | charts.pipelineGenerator | string | `"europe-west1-docker.pkg.dev/fc-tekton/charts/pipeline-generator"` | OCI image package of the pipeline generator chart |
 | configuration.artifactsEnabled | bool | `true` | If burnup and burndown is enabled this enable the artifact creation and its download process also. Enabled by dafault. |
@@ -239,13 +300,13 @@ pipelines:
 | configuration.email | string | `"nobody@example.com"` | Email account where to send the email when a failure ocurr |
 | configuration.enableAutocloneRepo | bool | `true` | If burnup is enabled this enable also the autoclone process to download from the repository. This is enabled by default. |
 | configuration.gcsBucket | string | `"fc-tekton-artifacts"` | Bucket name to save artifacts and cache packages. Current GCS is only supported. TODO: When this program is free this will need to be changed to an example bucket name. |
-| configuration.gcsCacheConfiguration | object | `{"parallelCompositeUpload":{"componenSize":32,"threshold":"100M"},"slidedObjectDownload":{"componentSize":100,"threshold":"100M"}}` | Configuration options for faster downloads/uploads caches/artifacts with gcs available.  (since 1.3.0) |
-| configuration.gcsCacheConfiguration.parallelCompositeUpload | object | `{"componenSize":32,"threshold":"100M"}` | Configuration options for uploads  (since 1.3.0) |
-| configuration.gcsCacheConfiguration.parallelCompositeUpload.componenSize | int | `32` | Chunks parallelize uploads  (since 1.3.0) |
-| configuration.gcsCacheConfiguration.parallelCompositeUpload.threshold | string | `"100M"` | Min size for parallelize upload  (since 1.3.0) |
-| configuration.gcsCacheConfiguration.slidedObjectDownload | object | `{"componentSize":100,"threshold":"100M"}` | Configuration options for downloads  (since 1.3.0) |
-| configuration.gcsCacheConfiguration.slidedObjectDownload.componentSize | int | `100` | Chunks parallelize download  (since 1.3.0) |
-| configuration.gcsCacheConfiguration.slidedObjectDownload.threshold | string | `"100M"` | Min size for parallelize download  (since 1.3.0) |
+| configuration.gcsCacheConfiguration | object | `{"parallelCompositeUpload":{"componenSize":32,"threshold":"100M"},"slidedObjectDownload":{"componentSize":100,"threshold":"100M"}}` | Configuration options for faster downloads/uploads caches/artifacts with gcs available.  (since 1.3.0) |
+| configuration.gcsCacheConfiguration.parallelCompositeUpload | object | `{"componenSize":32,"threshold":"100M"}` | Configuration options for uploads  (since 1.3.0) |
+| configuration.gcsCacheConfiguration.parallelCompositeUpload.componenSize | int | `32` | Chunks parallelize uploads  (since 1.3.0) |
+| configuration.gcsCacheConfiguration.parallelCompositeUpload.threshold | string | `"100M"` | Min size for parallelize upload  (since 1.3.0) |
+| configuration.gcsCacheConfiguration.slidedObjectDownload | object | `{"componentSize":100,"threshold":"100M"}` | Configuration options for downloads  (since 1.3.0) |
+| configuration.gcsCacheConfiguration.slidedObjectDownload.componentSize | int | `100` | Chunks parallelize download  (since 1.3.0) |
+| configuration.gcsCacheConfiguration.slidedObjectDownload.threshold | string | `"100M"` | Min size for parallelize download  (since 1.3.0) |
 | configuration.gitCredentialsSecret | string | `""` | K8s secret name to authenticate with the git reposotiry if needed |
 | configuration.gitFiles | string | `""` | List of files with relative path of files added, changed or deleted from the last push (set of one or more commits) (since 1.4.0) |
 | configuration.nodeSelector | object | `{}` | Node selector configuration to set the pod of the pipeline launcher instance [nodeSelector](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector) |
@@ -257,11 +318,17 @@ pipelines:
 | configuration.sendmailTaksName | string | `"fc-launcher-sendmail"` | Name of the Task in Tekton which runs the process of sending the email. The Task is installed with the launcher and its names depends of the release name given. |
 | configuration.sharedDataWorkspace | object | `{}` | Tekton workspace configuration to use in a pipeline. By default no workspace is used. More information in [Workspaces](https://tekton.dev/docs/pipelines/pipelineruns/#specifying-workspaces) |
 | configuration.tektonDashboardURL | string | `"http://tekton.example.com"` | Tekton Dashboard URL used to create a link in the email sent when a failure ocurr. For debugging process. |
-| configuration.timeout | string | `"1h0m0s"` | Step max time execution. [timeout](https://tekton.dev/docs/pipelines/pipelines/#specifying-timeout)  (since 1.7.0) |
+| configuration.timeout | string | `"1h0m0s"` | Step max time execution. [timeout](https://tekton.dev/docs/pipelines/pipelines/#specifying-timeout)  (since 1.7.0) |
 | configuration.tolerations | list | `[]` | Pod tolerations to run the pipelines launcher instances [tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) |
 | configuration.type | string | `"custom"` | Type of pipeline to build. Currently the differents types supported are: branches, tags, pull_requests and custom. Custom is used only to be launched from a pipeline, not from a remote event (webhook) |
 | createNamespace | bool | `false` | If this variable is set to 'true' automatically the launcher process create the namespace and service account needed to run the pipeline. The service account name will have the same name than the namespace. |
-| customLabels | string | `""` | If `createNamespace` is set to 'true' it creates the namespace adding the labels here specified to it. The value of this variables is a string of `keys=values` where `keys` is the name of the label and `values` its value. Every `key=value` must be separated by a blank space. Example: `customLabels: "custom.label2=value1 custom.label2=value2" |
+| customLabels | list | `[]` | If `createNamespace` is set to 'true' it creates the namespace adding the labels specified to it. The value should be a list of strings in the format `key=value`. Example: `customLabels: ["custom.label=value1", "custom.label2=value2"]` or using YAML list syntax:
+```yaml
+customLabels:
+  - custom.label=value1
+  - custom.label2=value2
+```
+ |
 | image | string | `"europe-west1-docker.pkg.dev/fc-tekton/containers/gcloud-kubectl-helm-tkn:0.4.1"` | Image with helm (gcloud, kubectl and tkn also) to parse the custom pipeline and install in the Tekton cluster like a PipelineRun CRD |
 | namespace | string | `"default"` | Namespace where the pipeline will be installed |
 | pipelines | list | `[]` | Pipeline configuration. More information below. |
@@ -270,82 +337,80 @@ pipelines:
 ----------------------------------------------
 Autogenerated from chart metadata using [helm-docs v1.13.1](https://github.com/norwoodj/helm-docs/releases/v1.13.1)
 
-## Definition of pipeline
+## Pipeline Definition Reference
+
+Below is the full schema for defining pipelines:
 
 ```yaml
 pipelines:
-  branches:                           # type of pipeline: branches, tags, pull_requests
-                                      # and custom
-  - name:                             # name of the pipeline
-    regex:                            # regular expression to match
-                                      # the branch or tag
-    serviceAccount:                   # k8s service account with permission
-                                      # to launch new pipelines and deploy
-                                      # new manifests
-    nextPipeline:                     # default value '{}'
-      success:                        # custom pipeline to launch whose regex field
-                                      # match with the value of 'success'
-      failed:                         # custom pipeline to launch whose regex field
-                                      # match with the value of 'failed'
-      customParamsExtra:              # add the value of this variable to customParams if exists and send it to next pipelines. It can use the results of previous steps.
-      burnupEnabled:                  # enable (true and default) or disable (false) the `burnup` in the step that launch next pipelines
-      burndownEnabled:                # enable (true and default) or disable (false) the `burndown` in the step that launch next pipelines
+  # Pipeline Types
+  branches:                           # Type of pipeline: branches, tags, pull_requests, or custom
+  - name: string                      # Name of the pipeline
+    regex: string                     # Regular expression to match branch or tag name
+    serviceAccount: string            # K8s service account with permissions to launch 
+                                      # new pipelines and deploy manifests
+    nextPipeline:                     # Configuration for subsequent pipelines (default: {})
+      success: string                 # Custom pipeline to launch when this succeeds
+                                      # (must match regex of target pipeline)
+      failed: string                  # Custom pipeline to launch when this fails
+      customParamsExtra: string       # Additional parameters to pass to next pipeline
+                                      # Can use results from previous steps
+      burnupEnabled: boolean          # Enable/disable burnup in the step that
+                                      # launches next pipelines (default: true)
+      burndownEnabled: boolean        # Enable/disable burndown in the step that
+                                      # launches next pipelines (default: true)
 
-    steps:                            # list of steps to run in the pipeline
-    - name:                           # name of the step
-      timeout:                        # timeout for the step. Use tekton syntax. Example: 1h30m0s
-      description:                    # a description for the step
-      runAfter: []                    # list of steps in this pipeline to run
-                                      # after them
-      burnupEnabled:                  # values are "true" or "false", for download repository, caches or artifacts, since 0.3.2 fc-pipeline-generator version, default value is true
-      burndownEnabled:                # values are "true" or "false", for download repository, caches or artifacts, since 0.3.2 fc-pipeline-generator version, default value is true
-      image:                          # container imagen to run in this step
-      imagePullPolicy:                # since 1.1.0 specific policy for download image for step
-      resources: {}                   # since 1.2.0 this option is treatment as resources of pods
-                                      #  resources:
-                                      #    limits:
-                                      #      cpu: 4
-                                      #     requests:
-                                      #      cpu: 3
-                                      # https://kubernetes.io/docs/concepts/configuration/manage-resources-containers
-      env: []                         # list of environment variables in kubernetes
-                                      # format.
-                                      # https://kubernetes.io/docs/tasks/inject-data-application/define-environment-variable-container/
-      params:                         # list of custom parameter to use later in the
-                                      # script or arguments
-      - name:                         # name of the custom parameter
-        value:                        # value of the custom paramater
-      volumes: []                     # custom volumes. It mount a volume in /mnt/[volumeName] in the step.
-                                      # If a configmap or secret is used, it will be mounted in /mnt/[volumeName]/[keyName].
-                                      # More information in https://tekton.dev/vault/pipelines-v0.16.3/tasks/#specifying-volumes
-      command: []                     # list of string to define the command of
-                                      # the step
-      args: []                        # list of string to define the arguments
-                                      # of the command
-      script:                         # script to run instead a command/args
-      artifacts: []                   # list of string to define the generated artifacts
-                                      # we want to save in this step.
-      cache: []                       # list of string to defint wich files will be
-                                      # chached to be retrieve in a future pipeline runs
-      sidecars:                       # list of containers which run at the same
-                                      # time that this step, for example to run
-                                      # depedencies for testing.
-      - name:                         # name of the container
-        image:                        # name of the image
-        env: []                       # list of environment variables in kubernetes
-                                      # format.
-                                      # https://kubernetes.io/docs/tasks/inject-data-application/define-environment-variable-container/
-        ...                           # More information in https://tekton.dev/vault/pipelines-v0.16.3/tasks/#specifying-sidecars
-    finishSteps:                      # steps to run at the end of the pipeline
-      - name:                         # name of the finish step
-        condition:                    # condition when this step must be run.
-                                      # possible values are: success, failed and
-        ...                           # always. Read about steps above
+    steps:                            # List of steps to run in the pipeline
+    - name: string                    # Name of the step
+      timeout: string                 # Timeout for the step (e.g., "1h30m0s")
+      description: string             # Description of the step
+      runAfter:                       # List of steps that must complete before this one
+      - step-name
+      burnupEnabled: string           # "true" or "false" - controls artifacts/cache download
+      burndownEnabled: string         # "true" or "false" - controls artifacts/cache upload
+      image: string                   # Container image for this step
+      imagePullPolicy: string         # Image download policy (since 1.1.0)
+      resources:                      # Container resource requirements (since 1.2.0)
+        limits:                       # Maximum resource allocation
+          cpu: string/number
+          memory: string
+        requests:                     # Requested resource allocation
+          cpu: string/number
+          memory: string
+      env:                            # Environment variables (Kubernetes format)
+      - name: string
+        value: string
+        # Or valueFrom with secretKeyRef, configMapKeyRef, etc.
+      params:                         # Custom parameters for scripts/args
+      - name: string
+        value: string
+      volumes:                        # Custom volumes (mounted at /mnt/[volumeName])
+      - name: string
+        # Volume source configuration
+      command:                        # Command to run (list of strings)
+      - string
+      args:                           # Arguments for command (list of strings)
+      - string
+      script: string                  # Script to run (alternative to command/args)
+      artifacts:                      # Paths to artifacts to save from this step
+      - path/to/artifact
+      cache:                          # Paths to cache for future pipeline runs
+      - path/to/cache
+      sidecars:                       # Containers running alongside the step
+      - name: string
+        image: string
+        env:
+        - name: string
+          value: string
+        # Other sidecar configurations
 
-  tags: {}                            # pipelines of type tag.
-                                      # Read branches above
-  pull_requests: {}                   # pipelines of type pull_request.
-                                      # Read branches above
-  common: {}                          # pipelines of type common.
-                                      # Read branches above
+    finishSteps:                      # Steps to run at the end of the pipeline
+    - name: string                    # Name of the finish step
+      condition: string               # When to run: "success", "failed", or "always"
+      # Other step configurations as above
+
+  # Other pipeline types with same schema
+  tags: []                            # Pipelines triggered by tags
+  pull_requests: []                   # Pipelines triggered by pull requests
+  custom: []                          # Custom pipelines (only launched by other pipelines)
 ```

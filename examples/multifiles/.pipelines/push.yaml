@@ -1,0 +1,44 @@
+- name: main
+  regex: "^main$"
+  serviceAccount: *namespace
+  nextPipeline: {}
+  steps:
+
+    - name: git-clone
+      description: Clone the repository
+      <<: *gitClone
+
+    # TODO: Helmfile diff (luego activaremos apply)
+    - name: helmfile-apply-test
+      description: Apply helmfile changes to test
+      runAfter:
+        - git-clone
+      serviceAccount: *namespace
+      <<: *helmfileImage
+      burndownEnabled: "false"
+      params:
+        - name: project
+          value: "fc-idi-pro-rev1"
+        - name: region
+          value: "europe-west4"
+        - name: cluster
+          value: "fc-idi-europe"
+      script: |
+        #!/usr/bin/env sh
+        set -ex
+
+        # Set up gke credentials
+        gcloud container clusters get-credentials \
+          $(params.cluster) \
+          --region $(params.region) \
+          --project $(params.project)
+
+        gcloud auth application-default print-access-token | helm registry \
+              login -u oauth2accesstoken --password-stdin https://europe-docker.pkg.dev
+
+        /usr/local/bin/helmfile diff -f deploy/env/test/helmfile.yaml
+        #/usr/local/bin/helmfile apply -f deploy/env/test/helmfile.yaml
+
+    # Test end to end in test environment
+
+    # Deploy to production
