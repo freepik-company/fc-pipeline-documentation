@@ -3,7 +3,7 @@
 #
 configuration:
   gitCredentialsSecret: github-credentials
-  tektonDashboardURL: https://pipelines.fpkmon.com/
+  tektonDashboardURL: https://tekton-dashboard.example.org/
   sendmailSender: jarvis@freepik.com
   nodeSelector:
     machine_type: n2d-standard-16

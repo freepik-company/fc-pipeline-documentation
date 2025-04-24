@@ -20,7 +20,7 @@ customLabels:
 
 configuration:
   gitCredentialsSecret: bitbucket-credentials 
-  tektonDashboardURL: https://pipelines.fpkmon.com/
+  tektonDashboardURL: https://tekton-dashboard.example.org/
   sendmailSender: jarvis@freepik.com
   defaultImagePullPolicy: IfNotPresent
   cloneDepth: 20
@@ -89,7 +89,7 @@ pipelines:
 ```yaml
 configuration:
   gitCredentialsSecret: github-credentials
-  tektonDashboardURL: https://pipelines.fpkmon.com/
+  tektonDashboardURL: https://tekton-dashboard.example.org/
   sendmailSender: jarvis@freepik.com
   nodeSelector:
     machine_type: n2d-standard-16
@@ -166,7 +166,7 @@ namespace: my-namespace
 
 configuration:
   gitCredentialsSecret: github-credentials
-  tektonDashboardURL: https://pipelines.fpkmon.com/
+  tektonDashboardURL: https://tekton-dashboard.example.org/
   sendmailSender: jarvis@freepik.com
 
 pipelines:
@@ -253,7 +253,7 @@ namespace: my-namespace
 
 configuration:
   gitCredentialsSecret: github-credentials
-  tektonDashboardURL: https://pipelines.fpkmon.com/
+  tektonDashboardURL: https://tekton-dashboard.example.org/
 
 pipelines:
   pull_requests:
@@ -317,7 +317,7 @@ pipelines:
 | configuration.sendmailSubject | string | `"Pipeline of project '$(params.project)' failed!"` | Default subject of the email when a failure ocurr |
 | configuration.sendmailTaksName | string | `"fc-launcher-sendmail"` | Name of the Task in Tekton which runs the process of sending the email. The Task is installed with the launcher and its names depends of the release name given. |
 | configuration.sharedDataWorkspace | object | `{}` | Tekton workspace configuration to use in a pipeline. By default no workspace is used. More information in [Workspaces](https://tekton.dev/docs/pipelines/pipelineruns/#specifying-workspaces) |
-| configuration.tektonDashboardURL | string | `"http://tekton.example.com"` | Tekton Dashboard URL used to create a link in the email sent when a failure ocurr. For debugging process. |
+| configuration.tektonDashboardURL | string | `"https://tekton-dashboard.example.org/"` | Tekton Dashboard URL used to create a link in the email sent when a failure ocurr. For debugging process. |
 | configuration.timeout | string | `"1h0m0s"` | Step max time execution. [timeout](https://tekton.dev/docs/pipelines/pipelines/#specifying-timeout)  (since 1.7.0) |
 | configuration.tolerations | list | `[]` | Pod tolerations to run the pipelines launcher instances [tolerations](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) |
 | configuration.type | string | `"custom"` | Type of pipeline to build. Currently the differents types supported are: branches, tags, pull_requests and custom. Custom is used only to be launched from a pipeline, not from a remote event (webhook) |
